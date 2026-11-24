@@ -6,6 +6,7 @@ from image_lab.validation import Invalid
 
 MAX_UPLOAD = 14 * 1024 * 1024
 MAX_PIXELS = 4_000_000
+SHIFT_LIMIT = 10
 LIGHTS = {"a": "灯 A", "b": "灯 B"}
 MODES = {
     "coverage": "转移覆盖",
@@ -60,9 +61,23 @@ def positions(value, size, rectangle):
     return points
 
 
+def shift(value):
+    if not isinstance(value, (tuple, list)) or len(value) != 2:
+        raise Invalid("平移套准应包含横向和纵向两个像素值。")
+    chosen = []
+    for component in value:
+        if isinstance(component, bool) or not isinstance(component, int):
+            raise Invalid("平移套准应为整像素。")
+        if abs(component) > SHIFT_LIMIT:
+            raise Invalid(f"平移套准横竖各须在 {SHIFT_LIMIT} 像素内。")
+        chosen.append(component)
+    return chosen
+
+
 def defaults(width, height):
     return {
         "light": "a", "threshold": 44, "mm_per_pixel": 0.1, "min_pixels": 6,
+        "shift": [0, 0],
         "inspect": [0, 0, width, height],
         "gold": [width // 4, height // 4, width // 2, height // 2],
         "paper": [0, 0, max(width // 8, 1), max(height // 8, 1)],
@@ -83,6 +98,7 @@ def settings(value, panel):
         threshold=number(value.get("threshold", base["threshold"]), "箔色门槛", -255, 255),
         mm_per_pixel=number(value.get("mm_per_pixel", base["mm_per_pixel"]), "毫米每像素", 0.001, 100),
         min_pixels=int(number(value.get("min_pixels", base["min_pixels"]), "最小斑块像素数", 1, MAX_PIXELS)),
+        shift=shift(value.get("shift", base.get("shift", [0, 0]))),
     )
     return chosen
 

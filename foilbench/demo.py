@@ -47,6 +47,20 @@ def reflectance(design, direction):
     return Image.fromarray(np.uint8(np.clip(stock, 0, 255)), "RGB")
 
 
+def displace(image, dx, dy):
+    """Shift photo content by (dx, dy), filling the vacated edge with paper grain."""
+    arr = np.array(image)
+    height, width = arr.shape[:2]
+    rng = np.random.default_rng(31)
+    y, _ = np.indices((height, width))
+    fill = np.array([42, 50, 63]) + (rng.normal(0, 1.8, (height, width)) + y / 90)[..., None]
+    out = np.uint8(np.clip(fill, 0, 255))
+    xs = slice(max(0, -dx), min(width, width - dx))
+    ys = slice(max(0, -dy), min(height, height - dy))
+    out[ys.start + dy:ys.stop + dy, xs.start + dx:xs.stop + dx] = arr[ys, xs]
+    return Image.fromarray(out, "RGB")
+
+
 def create(library):
     size = 880, 478
     stencil = die_art(size)
@@ -57,5 +71,5 @@ def create(library):
     return library.create("子午线礼盒 · 合成练习", {
         "design": (stencil, "meridian-die.png"),
         "a": (reflectance(design, 1), "meridian-light-a.png"),
-        "b": (reflectance(design, -1), "meridian-light-b.png"),
+        "b": (displace(reflectance(design, -1), 3, -2), "meridian-light-b.png"),
     }, chosen, synthetic=True)

@@ -6,15 +6,17 @@ const ctx = map.getContext('2d');
 const current = {
   panel: null, settings: null, config: null, mode: 'coverage', view: 'marked',
   tool: 'point', first: null, pin: null, saved: null, image: null,
+  suggestion: null, previewing: false,
   drawing: 0, computing: 0, reading: 0, opening: 0,
 };
 const columns = {
   expected_px: '版图像素', transfer_px: '转移像素', gap_px: '缺箔像素', coverage_pct: '覆盖 %',
-  expected_mm2: '版图 mm²', gap_mm2: '缺箔 mm²', index: '序号', pixels: '像素数', area_mm2: '面积 mm²',
-  width_mm: '宽 mm', height_mm: '高 mm', x: '源 X', y: '源 Y', distance_mm: '距离 mm',
-  score: '箔色', expected: '版图', foil: '照片', reference: '参照', low_score: '第 10 百分位',
-  median_score: '中位数', high_score: '第 90 百分位', foil_pct: '检出 %', lower: '下界',
-  upper: '上界', die_px: '版图像素', paper_px: '留白像素',
+  expected_mm2: '版图 mm²', gap_mm2: '缺箔 mm²', out_of_frame_px: '画面外像素',
+  out_of_frame_mm2: '画面外 mm²', captured: '画面内', index: '序号', pixels: '像素数',
+  area_mm2: '面积 mm²', width_mm: '宽 mm', height_mm: '高 mm', x: '源 X', y: '源 Y',
+  distance_mm: '距离 mm', score: '箔色', expected: '版图', foil: '照片', reference: '参照',
+  low_score: '第 10 百分位', median_score: '中位数', high_score: '第 90 百分位',
+  foil_pct: '检出 %', lower: '下界', upper: '上界', die_px: '版图像素', paper_px: '留白像素',
 };
 const directions = {point: '点图面可读源照片像素。', inspect: '点选检查窗的两个角。',
   gold: '圈一处已确认转移的箔色作为参照。', paper: '圈一处确认留白的纸色作为参照。',
@@ -85,6 +87,70 @@ function announceMap(message) {
   byId('map-note').textContent = message;
 }
 
+function shiftText(pair) {
+  const [dx, dy] = pair;
+  const parts = [];
+  if (dx > 0) parts.push('右 ' + dx + ' px');
+  if (dx < 0) parts.push('左 ' + (-dx) + ' px');
+  if (dy > 0) parts.push('下 ' + dy + ' px');
+  if (dy < 0) parts.push('上 ' + (-dy) + ' px');
+  return parts.length ? parts.join(' · ') : '无需平移';
+}
+
+function renderShiftPanel() {
+  const box = byId('shift-box');
+  if (!current.panel || current.saved) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  const shift = current.settings.shift || [0, 0];
+  const adopted = Boolean(shift[0] || shift[1]);
+  const suggestion = current.suggestion;
+  byId('find-shift').disabled = adopted;
+  const panel = byId('shift-panel');
+  if (!suggestion && !adopted) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const lines = [];
+  if (adopted) {
+    lines.push('已采用：版图' + shiftText(shift) + '。覆盖率与读单点按对齐后计算，画面外边缘不计入。');
+  } else {
+    lines.push('建议：版图' + shiftText(suggestion.shift) + '（按' +
+      current.config.lights[suggestion.light] + '，横竖 ±' + suggestion.limit + ' px 内）。');
+  }
+  if (suggestion) {
+    const parts = [];
+    if (suggestion.main) {
+      parts.push('主要图案还差 ' + suggestion.main.mismatch_px + ' px（' + suggestion.main.mismatch_pct + '%）');
+    }
+    if (suggestion.fine) {
+      parts.push('细小图案还差 ' + suggestion.fine.mismatch_px + ' px（' + suggestion.fine.mismatch_pct + '%）');
+    }
+    if (parts.length) lines.push(parts.join('，') + '。');
+    if (suggestion.main && suggestion.fine && !suggestion.agree) {
+      lines.push('两处各自最优不同（主要：' + shiftText(suggestion.main.best_shift) +
+        '；细小：' + shiftText(suggestion.fine.best_shift) + '），已等重折中，未让大块色面单独决定。');
+    }
+    if (!suggestion.fine) lines.push('检查窗内分不出细小图案，仅按主要图案评估。');
+  }
+  byId('shift-note').textContent = lines.join('\n');
+  byId('preview-shift').hidden = !suggestion || adopted;
+  byId('preview-shift').textContent = current.previewing ? '取消预览' : '预览';
+  byId('adopt-shift').hidden = !suggestion || adopted;
+  byId('drop-shift').hidden = !suggestion || adopted;
+  byId('revert-shift').hidden = !adopted;
+}
+
+function clearSuggestion() {
+  if (!current.suggestion && !current.previewing) return;
+  current.suggestion = null;
+  current.previewing = false;
+  renderShiftPanel();
+}
+
 function drawMap() {
   if (!current.image) return;
   ctx.drawImage(current.image, 0, 0, map.width, map.height);
@@ -92,7 +158,7 @@ function drawMap() {
   ctx.lineWidth = Math.max(1, map.width / 800);
   ctx.setLineDash([6, 4]);
   const options = current.saved?.settings || current.settings;
-  if (current.view !== 'marked') {
+  if (current.view !== 'marked' && !current.previewing) {
     const [x0, y0, x1, y1] = options.inspect;
     ctx.strokeRect(x0 + 1, y0 + 1, x1 - x0 - 2, y1 - y0 - 2);
   }
@@ -117,7 +183,12 @@ async function paint() {
   const settings = current.saved?.settings || current.settings;
   let source = sourceUrl(current.view === 'design' ? 'design' : settings.light);
   let marker;
-  if (current.view === 'marked') {
+  if (current.previewing && current.suggestion && !current.saved) {
+    const reply = await response(endpoint('/registration.png'), 'POST',
+      {settings: current.settings, shift: current.suggestion.shift});
+    marker = URL.createObjectURL(await reply.blob());
+    source = marker;
+  } else if (current.view === 'marked') {
     if (current.saved) {
       source = reportUrl('/overlay.png');
     } else {
@@ -198,6 +269,7 @@ function renderHeader() {
     byId('csv').href = reportUrl('/report.csv');
     byId('overlay').href = reportUrl('/overlay.png?download=1');
   }
+  renderShiftPanel();
   renderArchive();
 }
 
@@ -205,6 +277,7 @@ function display(value, key) {
   if (value === null) return '—';
   if (key === 'expected') return value ? '应烫箔' : '留白';
   if (key === 'foil') return value ? '检测到箔色' : '低于门槛';
+  if (key === 'captured') return value ? '画面内' : '画面外';
   return String(value);
 }
 
@@ -212,6 +285,8 @@ function renderResult(report) {
   byId('result-heading').textContent = report.heading;
   const [x0, y0, x1, y1] = report.settings.inspect;
   const note = [current.config.lights[report.settings.light], '窗 ' + (x1 - x0) + ' × ' + (y1 - y0) + ' px'];
+  const shift = report.settings.shift || [0, 0];
+  if (shift[0] || shift[1]) note.push('版图平移 ' + shiftText(shift));
   if (report.meta.component_count !== undefined) note.push(report.meta.component_count + ' 个斑块');
   if (current.saved) note.push('已存档');
   byId('result-note').textContent = note.join(' · ');
@@ -276,12 +351,15 @@ async function activate(panel) {
   current.reading++;
   current.panel = panel;
   current.settings = structuredClone(panel.settings);
+  current.settings.shift = current.settings.shift || [0, 0];
   current.mode = 'coverage';
   current.view = 'marked';
   current.first = null;
   current.pin = null;
   current.saved = null;
   current.image = null;
+  current.suggestion = null;
+  current.previewing = false;
   current.tool = 'point';
   map.width = panel.width;
   map.height = panel.height;
@@ -305,6 +383,8 @@ async function openReport(id) {
   current.view = 'marked';
   current.pin = null;
   current.first = null;
+  current.suggestion = null;
+  current.previewing = false;
   current.tool = 'point';
   current.reading++;
   announceMap('点图面可核对存档使用的源像素。');
@@ -319,8 +399,12 @@ async function inspectPoint(x, y) {
   const chosen = current.saved ? {report: current.saved.id} : {settings: current.settings};
   const sample = await json(endpoint('/point'), 'POST', {...chosen, point: [x, y]});
   if (sequence !== current.reading) return;
-  const description = ['源像素 (' + sample.x + ', ' + sample.y + ')', current.config.lights[sample.light],
-    'RGB ' + sample.rgb.join(' / '), '箔色 ' + sample.score, sample.classification];
+  const description = ['源像素 (' + sample.x + ', ' + sample.y + ')'];
+  if (sample.plate_x !== undefined && sample.plate_x !== null) {
+    description.push('版图 (' + sample.plate_x + ', ' + sample.plate_y + ')');
+  }
+  description.push(current.config.lights[sample.light], 'RGB ' + sample.rgb.join(' / '),
+    '箔色 ' + sample.score, sample.classification);
   announceMap(description.join(' · '));
 }
 
@@ -348,6 +432,7 @@ map.onclick = safe(async event => {
   current.first = null;
   current.pin = null;
   current.tool = 'point';
+  if (tool === 'inspect') clearSuggestion();
   announceMap('已更新' + current.config.tools[tool] + '。' + directions.point);
   await refresh();
 });
@@ -368,6 +453,7 @@ for (const button of document.querySelectorAll('[data-light]')) {
   button.onclick = safe(async () => {
     current.settings.light = button.dataset.light;
     current.reading++;
+    clearSuggestion();
     announceMap(directions[current.tool]);
     await refresh();
   });
@@ -376,6 +462,8 @@ for (const button of document.querySelectorAll('[data-light]')) {
 for (const button of document.querySelectorAll('[data-view]')) {
   button.onclick = safe(async () => {
     current.view = button.dataset.view;
+    current.previewing = false;
+    renderShiftPanel();
     renderHeader();
     await paint();
   });
@@ -387,6 +475,7 @@ for (const key of inputKeys) {
     if (!field.value || !field.checkValidity()) throw Error('请检查设置的数值范围。');
     current.settings[key] = Number(field.value);
     current.reading++;
+    if (key === 'threshold') clearSuggestion();
     announceMap(directions[current.tool]);
     await refresh();
   });
@@ -403,6 +492,44 @@ byId('retain-settings').onclick = safe(async () => {
   current.panel = panel;
   await refresh();
   status('已保留检查设置。');
+});
+
+byId('find-shift').onclick = safe(async () => {
+  byId('find-shift').disabled = true;
+  status('正在检查窗内搜索平移套准…');
+  try {
+    current.suggestion = await json(endpoint('/registration'), 'POST', {settings: current.settings});
+    current.previewing = false;
+    status('已得到套准建议，可先预览再采用。');
+  } finally {
+    renderShiftPanel();
+  }
+});
+
+byId('preview-shift').onclick = safe(async () => {
+  current.previewing = !current.previewing;
+  renderShiftPanel();
+  await paint();
+});
+
+byId('adopt-shift').onclick = safe(async () => {
+  current.settings.shift = [...current.suggestion.shift];
+  current.previewing = false;
+  await refresh();
+  status('已采用套准平移。覆盖率与读单点按对齐后计算，画面外边缘不计入。');
+});
+
+byId('drop-shift').onclick = safe(async () => {
+  current.suggestion = null;
+  current.previewing = false;
+  renderShiftPanel();
+  await paint();
+});
+
+byId('revert-shift').onclick = safe(async () => {
+  current.settings.shift = [0, 0];
+  await refresh();
+  status('已撤回套准平移。');
 });
 
 byId('save').onclick = safe(async () => {

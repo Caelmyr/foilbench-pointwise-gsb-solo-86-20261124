@@ -112,6 +112,21 @@ def install(app, root):
         report = analysis.report(library, panel, settings, model.mode(chosen.get("mode")))
         return png(output.overlay(library, panel, report))
 
+    @proof.post("/panels/<panel_id>/registration")
+    def registration(panel_id):
+        chosen = payload()
+        panel = library.panel(panel_id)
+        settings = model.settings(chosen.get("settings"), panel)
+        return jsonify(analysis.suggest_registration(library, panel, settings))
+
+    @proof.post("/panels/<panel_id>/registration.png")
+    def registration_overlay(panel_id):
+        chosen = payload()
+        panel = library.panel(panel_id)
+        settings = model.settings(chosen.get("settings"), panel)
+        shift = model.shift(chosen.get("shift", [0, 0]))
+        return png(output.registration_preview(library, panel, settings, shift))
+
     @proof.post("/panels/<panel_id>/point")
     def take_reading(panel_id):
         chosen = payload()

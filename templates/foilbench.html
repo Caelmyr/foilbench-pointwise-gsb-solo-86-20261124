@@ -45,6 +45,18 @@
           <label>毫米每像素 <input id="mm_per_pixel" type="number" min="0.001" max="100" step="0.001"></label>
           <label>最小斑块像素数 <input id="min_pixels" type="number" min="1" max="4000000" step="1"></label>
           <button id="retain-settings" class="outline">保留设置</button>
+          <div class="shift-box" id="shift-box">
+            <button id="find-shift" type="button">在检查窗内找平移套准</button>
+            <div id="shift-panel" hidden>
+              <p id="shift-note"></p>
+              <div class="shift-actions">
+                <button id="preview-shift" type="button">预览</button>
+                <button id="adopt-shift" type="button" class="gold">采用</button>
+                <button id="drop-shift" type="button" class="quiet">忽略</button>
+                <button id="revert-shift" type="button" class="outline" hidden>撤回套准</button>
+              </div>
+            </div>
+          </div>
         </section>
         <section class="history"><h2>检查存档</h2><div id="archive"></div></section>
       </aside>
