@@ -123,6 +123,8 @@ def install(app, root):
             record = library.panel(panel_id)
             settings = model.settings(chosen.get("settings"), record)
         point = model.point(chosen.get("point"), record)
+        if analysis.has_two_lights(record):
+            return jsonify(analysis.dual_point_reading(library, record, settings, point))
         return jsonify(analysis.point_reading(library, record, settings, point))
 
     @proof.post("/panels/<panel_id>/reports")

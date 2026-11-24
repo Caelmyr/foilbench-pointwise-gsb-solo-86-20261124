@@ -296,6 +296,61 @@ main {
   min-height: 19px;
 }
 
+.point-panel {
+  flex-basis: 100%;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.point-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 7px;
+  font-size: 13px;
+}
+
+.verdict {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 11px;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.verdict[data-kind="ok"] {
+  color: #b4ecde;
+  border-color: #6ab9aa;
+  background: #263b3a;
+}
+
+.verdict[data-kind="bad"] {
+  color: #ffc2cb;
+  border-color: #c85d6d;
+  background: #43262c;
+}
+
+.verdict[data-kind="review"] {
+  color: #f6d59a;
+  border-color: #b98a3e;
+  background: #3d3120;
+}
+
+.verdict[data-kind="leak"] {
+  color: #e3c6fb;
+  border-color: #9c73c4;
+  background: #352647;
+}
+
+.point-panel table {
+  font-size: 12.5px;
+}
+
+.point-panel th,.point-panel td {
+  padding: 5px 8px;
+}
+
 .side {
   display: grid;
   gap: 13px;

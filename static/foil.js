@@ -9,13 +9,16 @@ const current = {
   drawing: 0, computing: 0, reading: 0, opening: 0,
 };
 const columns = {
-  expected_px: '版图像素', transfer_px: '转移像素', gap_px: '缺箔像素', coverage_pct: '覆盖 %',
-  expected_mm2: '版图 mm²', gap_mm2: '缺箔 mm²', index: '序号', pixels: '像素数', area_mm2: '面积 mm²',
+  expected_px: '版图像素', transfer_px: '转移像素', gap_px: '缺箔像素',
+  review_px: '待复看像素', coverage_pct: '覆盖 %', expected_mm2: '版图 mm²',
+  gap_mm2: '缺箔 mm²', review_mm2: '待复看 mm²', light_a_px: '灯 A 检出像素',
+  light_b_px: '灯 B 检出像素', index: '序号', pixels: '像素数', area_mm2: '面积 mm²',
   width_mm: '宽 mm', height_mm: '高 mm', x: '源 X', y: '源 Y', distance_mm: '距离 mm',
   score: '箔色', expected: '版图', foil: '照片', reference: '参照', low_score: '第 10 百分位',
   median_score: '中位数', high_score: '第 90 百分位', foil_pct: '检出 %', lower: '下界',
   upper: '上界', die_px: '版图像素', paper_px: '留白像素',
 };
+const verdictClass = {'已转移': 'ok', '缺箔': 'bad', '待复看': 'review', '越界': 'leak', '留白': 'plain'};
 const directions = {point: '点图面可读源照片像素。', inspect: '点选检查窗的两个角。',
   gold: '圈一处已确认转移的箔色作为参照。', paper: '圈一处确认留白的纸色作为参照。',
   line: '在图面上点选剖线的两端。'};
@@ -211,8 +214,13 @@ function display(value, key) {
 function renderResult(report) {
   byId('result-heading').textContent = report.heading;
   const [x0, y0, x1, y1] = report.settings.inspect;
-  const note = [current.config.lights[report.settings.light], '窗 ' + (x1 - x0) + ' × ' + (y1 - y0) + ' px'];
+  const note = report.dual_light ? ['双灯检查（A + B）'] : [current.config.lights[report.settings.light]];
+  note.push('窗 ' + (x1 - x0) + ' × ' + (y1 - y0) + ' px');
   if (report.meta.component_count !== undefined) note.push(report.meta.component_count + ' 个斑块');
+  if (report.dual_light && report.meta.pending_px !== undefined) {
+    note.push('分歧 ' + report.meta.disagreement_px + ' px · 救回 ' + report.meta.rescued_px +
+      ' px · 待复看 ' + report.meta.pending_px + ' px');
+  }
   if (current.saved) note.push('已存档');
   byId('result-note').textContent = note.join(' · ');
   const keys = Object.keys(report.rows[0] || {}).filter(key => key !== 'box');
@@ -286,6 +294,7 @@ async function activate(panel) {
   map.width = panel.width;
   map.height = panel.height;
   localStorage.setItem('foilbench-panel', panel.id);
+  hidePointPanel();
   announceMap(directions.point);
   await Promise.all([refreshLibrary(), refresh()]);
 }
@@ -307,9 +316,45 @@ async function openReport(id) {
   current.first = null;
   current.tool = 'point';
   current.reading++;
+  hidePointPanel();
   announceMap('点图面可核对存档使用的源像素。');
   await refresh();
   status('已打开保存的检查。');
+}
+
+function hidePointPanel() {
+  byId('point-panel').hidden = true;
+}
+
+function renderPointPanel(sample) {
+  if (!sample.dual_light) {
+    hidePointPanel();
+    return;
+  }
+  const panel = byId('point-panel');
+  byId('point-title').textContent = '源像素 (' + sample.x + ', ' + sample.y + ') · ' +
+    (sample.expected ? '版图烫箔区' : '版图留白区');
+  const verdict = byId('point-verdict');
+  verdict.textContent = sample.verdict + (sample.rescued ? '（暗线救回）' : '');
+  verdict.dataset.kind = verdictClass[sample.verdict] || 'plain';
+  const body = document.createDocumentFragment();
+  for (const reading of sample.lights) {
+    const row = document.createElement('tr');
+    const cells = [
+      current.config.lights[reading.light],
+      reading.rgb.join(' / '),
+      String(reading.score),
+      reading.foil ? '检测到箔色' : '低于门槛',
+    ];
+    for (const value of cells) {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      row.append(cell);
+    }
+    body.append(row);
+  }
+  byId('point-rows').replaceChildren(body);
+  panel.hidden = false;
 }
 
 async function inspectPoint(x, y) {
@@ -319,9 +364,16 @@ async function inspectPoint(x, y) {
   const chosen = current.saved ? {report: current.saved.id} : {settings: current.settings};
   const sample = await json(endpoint('/point'), 'POST', {...chosen, point: [x, y]});
   if (sequence !== current.reading) return;
-  const description = ['源像素 (' + sample.x + ', ' + sample.y + ')', current.config.lights[sample.light],
-    'RGB ' + sample.rgb.join(' / '), '箔色 ' + sample.score, sample.classification];
-  announceMap(description.join(' · '));
+  renderPointPanel(sample);
+  if (sample.dual_light) {
+    const detail = sample.lights.map(reading => current.config.lights[reading.light] +
+      (reading.foil ? ' 有箔' : '无箔') + ' ' + reading.score).join(' · ');
+    announceMap('源像素 (' + sample.x + ', ' + sample.y + ') · ' + detail + ' · 判定 ' + sample.verdict);
+  } else {
+    const description = ['源像素 (' + sample.x + ', ' + sample.y + ')', current.config.lights[sample.light],
+      'RGB ' + sample.rgb.join(' / '), '箔色 ' + sample.score, sample.classification];
+    announceMap(description.join(' · '));
+  }
 }
 
 function pointOnMap(event) {
@@ -348,6 +400,7 @@ map.onclick = safe(async event => {
   current.first = null;
   current.pin = null;
   current.tool = 'point';
+  hidePointPanel();
   announceMap('已更新' + current.config.tools[tool] + '。' + directions.point);
   await refresh();
 });
@@ -358,6 +411,7 @@ for (const button of document.querySelectorAll('[data-tool]')) {
     current.pin = null;
     current.tool = button.dataset.tool;
     current.reading++;
+    hidePointPanel();
     announceMap(directions[current.tool]);
     renderHeader();
     drawMap();
@@ -417,6 +471,7 @@ byId('return-current').onclick = safe(async () => {
   current.saved = null;
   current.pin = null;
   current.reading++;
+  hidePointPanel();
   announceMap(directions.point);
   await refresh();
   status('已返回当前检查。');

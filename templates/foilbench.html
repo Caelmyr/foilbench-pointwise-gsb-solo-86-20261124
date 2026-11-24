@@ -36,6 +36,10 @@
             <button data-tool="point">读单点</button><button data-tool="inspect">画检查窗</button><button data-tool="gold">圈箔色</button><button data-tool="paper">圈纸色</button><button data-tool="line">画剖线</button>
           </div>
           <p id="map-note" aria-live="polite">点图面可读源照片像素。</p>
+          <div id="point-panel" class="point-panel" hidden>
+            <div class="point-head"><strong id="point-title">源像素</strong><span id="point-verdict" class="verdict"></span></div>
+            <table><thead><tr><th>方向灯</th><th>RGB</th><th>箔色</th><th>单灯判定</th></tr></thead><tbody id="point-rows"></tbody></table>
+          </div>
         </div>
       </section>
       <aside class="side">

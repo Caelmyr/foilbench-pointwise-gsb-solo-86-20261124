@@ -1,9 +1,18 @@
-"""Measure single-light transfer, gaps, overprint, and source-image readings."""
+"""Single-light transfer checks and the symmetric two-light coverage review."""
 
 import numpy as np
 from scipy import ndimage
 
 from . import frame, model
+
+# A disagreement component is only kept as foil when it continues the confirmed
+# foil along a real edge: one accidental touch from a speck inside a gap is not
+# enough, but a thin line joining confirmed foil on both sides always is.
+RESCUE_CONTACTS = 2
+
+TRANSFERRED = "已转移"
+MISSING = "缺箔"
+REVIEW = "待复看"
 
 
 def section(array, rect):
@@ -16,6 +25,65 @@ def layers(library, record, settings):
     design = frame.stencil(library, record)
     score = frame.foil_score(rgb)
     return rgb, design, score, score >= settings["threshold"]
+
+
+def dual_layers(library, record, settings):
+    design = frame.stencil(library, record)
+    rgb_a = frame.pixels(library, record, "a")
+    rgb_b = frame.pixels(library, record, "b")
+    detect_a = frame.foil_score(rgb_a) >= settings["threshold"]
+    detect_b = frame.foil_score(rgb_b) >= settings["threshold"]
+    return rgb_a, rgb_b, design, frame.foil_score(rgb_a), frame.foil_score(rgb_b), detect_a, detect_b
+
+
+def dual_arbitration(design, detect_a, detect_b):
+    """Combine two directional lights into transfer / gap / review masks.
+
+    The combination only uses set operations and four-neighbour connectivity,
+    so swapping the two lights produces exactly the same verdict.
+    """
+    confirmed = design & detect_a & detect_b
+    disagreement = detect_a ^ detect_b
+    labels, count = ndimage.label(disagreement)
+    touching = ndimage.binary_dilation(confirmed, iterations=1) & disagreement
+    populations = np.bincount(labels[touching].ravel())
+    keep = np.flatnonzero(populations >= RESCUE_CONTACTS)
+    rescued = np.isin(labels, keep) & disagreement & design
+    # Review only enters the die-based coverage account; disagreement on the
+    # paper margin is surfaced by point readings but never counted as foil.
+    pending = disagreement & design & ~rescued
+    transfer = confirmed | rescued
+    gap = design & ~transfer & ~pending
+    return {
+        "detect_a": detect_a, "detect_b": detect_b, "confirmed": confirmed,
+        "disagreement": disagreement, "rescued": rescued, "pending": pending,
+        "transfer": transfer, "gap": gap,
+    }
+
+
+def dual_coverage(masks, settings):
+    expected = section(masks["transfer"] | masks["gap"] | masks["pending"], settings["inspect"])
+    transfer = section(masks["transfer"], settings["inspect"])
+    gap = section(masks["gap"], settings["inspect"])
+    pending = section(masks["pending"], settings["inspect"])
+    detect_a = section(masks["detect_a"], settings["inspect"])
+    detect_b = section(masks["detect_b"], settings["inspect"])
+    total = int(expected.sum())
+    present = int(transfer.sum())
+    review_px = int(pending.sum())
+    decidable = present + int(gap.sum())
+    return [{
+        "expected_px": total,
+        "transfer_px": present,
+        "gap_px": int(gap.sum()),
+        "review_px": review_px,
+        "coverage_pct": round(100 * present / decidable, 2) if decidable else None,
+        "expected_mm2": square_area(total, settings),
+        "gap_mm2": square_area(int(gap.sum()), settings),
+        "review_mm2": square_area(review_px, settings),
+        "light_a_px": int(detect_a.sum()),
+        "light_b_px": int(detect_b.sum()),
+    }]
 
 
 def square_area(pixels, settings):
@@ -100,8 +168,16 @@ def distribution(score, design, settings):
 
 def classification(expected, marked):
     if expected:
-        return "已转移" if marked else "缺箔"
+        return TRANSFERRED if marked else MISSING
     return "越界" if marked else "留白"
+
+
+def dual_classification(design_yx, transfer_yx, pending_yx, disagreement_yx):
+    if pending_yx or (not design_yx and disagreement_yx):
+        return REVIEW
+    if design_yx:
+        return TRANSFERRED if transfer_yx else MISSING
+    return "越界"
 
 
 def point_reading(library, record, settings, point):
@@ -113,7 +189,44 @@ def point_reading(library, record, settings, point):
             "expected": expected, "foil": marked, "classification": classification(expected, marked)}
 
 
+def dual_point_reading(library, record, settings, point):
+    x, y = point
+    rgb_a, rgb_b, design, score_a, score_b, detect_a, detect_b = dual_layers(library, record, settings)
+    masks = dual_arbitration(design, detect_a, detect_b)
+    expected = bool(design[y, x])
+    verdict = dual_classification(expected, bool(masks["transfer"][y, x]),
+                                  bool(masks["pending"][y, x]),
+                                  bool(masks["disagreement"][y, x]))
+    return {
+        "x": x, "y": y, "dual_light": True, "expected": expected,
+        "verdict": verdict, "rescued": bool(masks["rescued"][y, x]),
+        "lights": [
+            {"light": "a", "rgb": [int(c) for c in rgb_a[y, x]],
+             "score": round(float(score_a[y, x]), 2), "foil": bool(detect_a[y, x])},
+            {"light": "b", "rgb": [int(c) for c in rgb_b[y, x]],
+             "score": round(float(score_b[y, x]), 2), "foil": bool(detect_b[y, x])},
+        ],
+    }
+
+
+def has_two_lights(record):
+    return all(role in record["sources"] for role in ("a", "b"))
+
+
 def report(library, record, settings, mode):
+    if mode == "coverage" and has_two_lights(record):
+        rgb_a, rgb_b, design, _, _, detect_a, detect_b = dual_layers(library, record, settings)
+        masks = dual_arbitration(design, detect_a, detect_b)
+        rows = dual_coverage(masks, settings)
+        meta = {
+            "dual_light": True,
+            "agreed_present_px": int(section(masks["confirmed"], settings["inspect"]).sum()),
+            "rescued_px": int(section(masks["rescued"], settings["inspect"]).sum()),
+            "pending_px": int(section(masks["pending"], settings["inspect"]).sum()),
+            "disagreement_px": int(section(masks["disagreement"], settings["inspect"]).sum()),
+        }
+        return {"mode": mode, "heading": model.MODES[mode], "settings": settings,
+                "rows": rows, "meta": meta, "dual_light": True}
     _, design, score, transfer = layers(library, record, settings)
     meta = {}
     if mode == "coverage":
