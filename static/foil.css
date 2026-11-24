@@ -560,3 +560,43 @@ dialog .actions {
     padding: .3rem .5rem;
   }
 }
+
+.label-panel {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 11px;
+  padding: 15px;
+}
+
+.label-panel h2 {
+  font-size: 16px;
+  margin-bottom: 6px;
+}
+
+.label-panel p {
+  font-size: 12.5px;
+  margin: 4px 0 8px;
+}
+
+.label-panel label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin: 9px 0;
+  color: var(--muted);
+}
+
+.label-panel input {
+  width: 105px;
+}
+
+.label-panel .outline {
+  width: 100%;
+  margin-top: 4px;
+}
+
+#label-note {
+  min-height: 19px;
+  color: var(--text);
+}

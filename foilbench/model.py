@@ -15,6 +15,7 @@ MODES = {
     "references": "箔色参照",
     "distribution": "箔色分布",
 }
+DEFAULT_LABEL = {"width_mm": 2.0, "clearance_mm": 1.0, "x": None}
 TOOLS = {
     "inspect": "检查窗",
     "gold": "已转移箔色参照",
@@ -67,7 +68,22 @@ def defaults(width, height):
         "gold": [width // 4, height // 4, width // 2, height // 2],
         "paper": [0, 0, max(width // 8, 1), max(height // 8, 1)],
         "line": [0, height // 2, width - 1, height // 2],
+        "label": dict(DEFAULT_LABEL),
     }
+
+
+def sticker(value, panel):
+    """Validate the sticker stripe width, minimum clearance, and optional adopted left edge."""
+    value = document(value)
+    width = number(value.get("width_mm"), "贴位宽度", 0.01, 10000)
+    clearance = number(value.get("clearance_mm"), "最小净距", 0.0, 10000)
+    pixels = max(1, math.ceil(max(width, clearance) / panel["settings"]["mm_per_pixel"]))
+    if pixels > max(panel["width"], panel["height"]):
+        raise Invalid("贴位宽度或最小净距超过这张印样的尺寸。")
+    x = value.get("x")
+    if x is not None and (isinstance(x, bool) or not isinstance(x, int) or not 0 <= x < panel["width"]):
+        raise Invalid("贴位横坐标应为源图内的整像素。")
+    return {"width_mm": width, "clearance_mm": clearance, "x": x}
 
 
 def settings(value, panel):
@@ -83,6 +99,7 @@ def settings(value, panel):
         threshold=number(value.get("threshold", base["threshold"]), "箔色门槛", -255, 255),
         mm_per_pixel=number(value.get("mm_per_pixel", base["mm_per_pixel"]), "毫米每像素", 0.001, 100),
         min_pixels=int(number(value.get("min_pixels", base["min_pixels"]), "最小斑块像素数", 1, MAX_PIXELS)),
+        label=sticker({**DEFAULT_LABEL, **value.get("label", base.get("label", {}))}, panel),
     )
     return chosen
 

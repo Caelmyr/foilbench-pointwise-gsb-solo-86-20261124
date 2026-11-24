@@ -3,7 +3,7 @@
 import numpy as np
 from scipy import ndimage
 
-from . import frame, model
+from . import frame, model, placement
 
 
 def section(array, rect):
@@ -98,19 +98,28 @@ def distribution(score, design, settings):
             for lo, hi, die, stock in zip(bands, bands[1:], target, paper)]
 
 
-def classification(expected, marked):
+def classification(expected, marked, label=False, ring=False):
     if expected:
         return "已转移" if marked else "缺箔"
-    return "越界" if marked else "留白"
+    if marked:
+        return "落进贴位" if label else ("侵入安全边" if ring else "越界")
+    return "留白"
 
 
 def point_reading(library, record, settings, point):
     x, y = point
     rgb, design, score, transfer = layers(library, record, settings)
     expected, marked = bool(design[y, x]), bool(transfer[y, x])
+    on_label = in_ring = False
+    if settings.get("label"):
+        found = placement.stripe(design, transfer, settings)["label"]
+        if found:
+            _, label, ring = placement.masks(design, transfer, settings, found["box"])
+            on_label, in_ring = bool(label[y, x]), bool(ring[y, x])
     return {"x": x, "y": y, "rgb": [int(c) for c in rgb[y, x]],
             "score": float(score[y, x]), "light": settings["light"],
-            "expected": expected, "foil": marked, "classification": classification(expected, marked)}
+            "expected": expected, "foil": marked, "label": on_label,
+            "classification": classification(expected, marked, on_label, in_ring)}
 
 
 def report(library, record, settings, mode):
@@ -121,7 +130,7 @@ def report(library, record, settings, mode):
     elif mode == "gaps":
         rows, meta["component_count"] = components(design & ~transfer, settings)
     elif mode == "leaks":
-        rows, meta["component_count"] = components(transfer & ~design, settings)
+        rows, meta = placement.leaks(design, transfer, settings)
     elif mode == "profile":
         rows = profile(score, design, transfer, settings)
     elif mode == "references":

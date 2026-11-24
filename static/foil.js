@@ -6,7 +6,7 @@ const ctx = map.getContext('2d');
 const current = {
   panel: null, settings: null, config: null, mode: 'coverage', view: 'marked',
   tool: 'point', first: null, pin: null, saved: null, image: null,
-  drawing: 0, computing: 0, reading: 0, opening: 0,
+  drawing: 0, computing: 0, reading: 0, opening: 0, meta: null,
 };
 const columns = {
   expected_px: '版图像素', transfer_px: '转移像素', gap_px: '缺箔像素', coverage_pct: '覆盖 %',
@@ -14,12 +14,16 @@ const columns = {
   width_mm: '宽 mm', height_mm: '高 mm', x: '源 X', y: '源 Y', distance_mm: '距离 mm',
   score: '箔色', expected: '版图', foil: '照片', reference: '参照', low_score: '第 10 百分位',
   median_score: '中位数', high_score: '第 90 百分位', foil_pct: '检出 %', lower: '下界',
-  upper: '上界', die_px: '版图像素', paper_px: '留白像素',
+  upper: '上界', die_px: '版图像素', paper_px: '留白像素', kind: '落点',
 };
 const directions = {point: '点图面可读源照片像素。', inspect: '点选检查窗的两个角。',
   gold: '圈一处已确认转移的箔色作为参照。', paper: '圈一处确认留白的纸色作为参照。',
   line: '在图面上点选剖线的两端。'};
 const inputKeys = ['threshold', 'mm_per_pixel', 'min_pixels'];
+
+function square(value) {
+  return Math.round(value * 100) / 100;
+}
 
 function status(message, error = false) {
   const element = byId('status');
@@ -85,6 +89,45 @@ function announceMap(message) {
   byId('map-note').textContent = message;
 }
 
+function describeLabel(meta) {
+  const label = meta?.label;
+  if (!label) {
+    const pieces = [meta?.reason || '检查窗内还没有贴位。'];
+    if (meta?.unviewable?.ranges?.length) {
+      pieces.push('安全边超出照片，无法核对：' + meta.unviewable.ranges
+        .map(item => item.side + '侧还差 ' + square(item.width_mm) + ' mm').join('，')
+        + '，共占安全边 ' + meta.unviewable.pct + '%');
+    }
+    return pieces.join(' ');
+  }
+  const where = '贴位 X ' + label.x0 + '–' + label.x1 + ' px，宽 ' + square(label.width_mm) + ' mm';
+  const offset = label.offset_side === '居中' ? '横带正中'
+    : '较窗中心' + label.offset_side + ' ' + square(label.offset_mm) + ' mm';
+  const clear = '实际净距 ' + square(label.clearance_mm) + ' mm / 要求 ' + square(label.requested_mm)
+    + ' mm' + (label.meets ? '' : '（未达要求）')
+    + '，最近箔 ' + (label.nearest_inside ? '在窗内' : '在窗外') + ' (' + label.nearest_x + ', ' + label.nearest_y + ')';
+  const view = meta.unviewable?.ranges?.length
+    ? '安全边超出照片，无法核对：' + meta.unviewable.ranges
+      .map(item => item.side + '侧还差 ' + square(item.width_mm) + ' mm').join('，')
+      + '，共占安全边 ' + meta.unviewable.pct + '%'
+    : '安全边完整落在照片内';
+  const pieces = [where, offset, clear, view];
+  if (label.alternative) {
+    pieces.push('若愿离开窗中心，X ' + label.alternative.x0 + '–' + label.alternative.x1
+      + ' px 可留 ' + square(label.alternative.clearance_mm) + ' mm 净距');
+  }
+  return (label.adopted ? '已采用：' : '建议：') + pieces.join('；') + '。';
+}
+
+function renderPlacement(meta) {
+  const note = byId('label-note');
+  const button = byId('label-apply');
+  const label = meta?.label;
+  note.textContent = current.mode === 'leaks' && meta ? describeLabel(meta) : '';
+  button.disabled = Boolean(current.saved) || current.mode !== 'leaks' || !label || label.adopted;
+  button.textContent = label?.adopted ? '已采用此贴位' : '采用这个贴位';
+}
+
 function drawMap() {
   if (!current.image) return;
   ctx.drawImage(current.image, 0, 0, map.width, map.height);
@@ -97,6 +140,19 @@ function drawMap() {
     ctx.strokeRect(x0 + 1, y0 + 1, x1 - x0 - 2, y1 - y0 - 2);
   }
   ctx.setLineDash([]);
+  const label = current.mode === 'leaks' ? current.meta?.label : null;
+  if (label && current.view !== 'design') {
+    ctx.strokeStyle = '#f4f1e8';
+    ctx.lineWidth = Math.max(2, map.width / 700);
+    const [x0, y0, x1, y1] = label.box;
+    ctx.strokeRect(x0 + 1, y0 + 1, x1 - x0 - 2, y1 - y0 - 2);
+    const spot = current.meta.unviewable || {};
+    if (spot.ranges?.length) {
+      ctx.strokeStyle = '#ff9fa8';
+      ctx.lineWidth = Math.max(2, map.width / 420);
+      ctx.strokeRect(1, 1, map.width - 2, map.height - 2);
+    }
+  }
   const point = current.first || current.pin;
   if (!point) return;
   const [x, y] = point;
@@ -186,6 +242,11 @@ function renderHeader() {
     byId(key).value = settings[key];
     byId(key).disabled = Boolean(current.saved);
   }
+  const label = settings.label || {};
+  byId('label-width').value = label.width_mm;
+  byId('label-clearance').value = label.clearance_mm;
+  byId('label-width').disabled = Boolean(current.saved);
+  byId('label-clearance').disabled = Boolean(current.saved);
   for (const button of document.querySelectorAll('[data-mode]')) {
     selected(button, button.dataset.mode === current.mode);
     button.disabled = Boolean(current.saved);
@@ -213,6 +274,9 @@ function renderResult(report) {
   const [x0, y0, x1, y1] = report.settings.inspect;
   const note = [current.config.lights[report.settings.light], '窗 ' + (x1 - x0) + ' × ' + (y1 - y0) + ' px'];
   if (report.meta.component_count !== undefined) note.push(report.meta.component_count + ' 个斑块');
+  if (report.mode === 'leaks' && report.meta.label) {
+    note.push('贴位 ' + report.meta.label.x0 + '–' + report.meta.label.x1 + ' px');
+  }
   if (current.saved) note.push('已存档');
   byId('result-note').textContent = note.join(' · ');
   const keys = Object.keys(report.rows[0] || {}).filter(key => key !== 'box');
@@ -249,9 +313,13 @@ function renderResult(report) {
 async function refresh() {
   const sequence = ++current.computing;
   renderHeader();
-  const compute = current.saved || json(endpoint('/preview'), 'POST', snapshot());
-  const [report] = await Promise.all([compute, paint()]);
-  if (sequence === current.computing) renderResult(report);
+  const computing = current.saved ? null : json(endpoint('/preview'), 'POST', snapshot());
+  const report = await (computing || Promise.resolve(current.saved));
+  if (sequence !== current.computing) return;
+  current.meta = report.meta;
+  renderResult(report);
+  renderPlacement(report.meta);
+  await paint();
 }
 
 async function refreshLibrary() {
@@ -282,6 +350,7 @@ async function activate(panel) {
   current.pin = null;
   current.saved = null;
   current.image = null;
+  current.meta = null;
   current.tool = 'point';
   map.width = panel.width;
   map.height = panel.height;
@@ -302,6 +371,7 @@ async function openReport(id) {
   if (sequence !== current.opening) return;
   current.saved = report;
   current.mode = report.mode;
+  current.meta = report.meta;
   current.view = 'marked';
   current.pin = null;
   current.first = null;
@@ -345,6 +415,10 @@ map.onclick = safe(async event => {
   const tool = current.tool;
   const rect = [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1) + 1, Math.max(y0, y1) + 1];
   current.settings[tool] = tool === 'line' ? [x0, y0, x1, y1] : rect;
+  if (tool === 'inspect') {
+    current.settings.label = current.settings.label || {};
+    current.settings.label.x = null;
+  }
   current.first = null;
   current.pin = null;
   current.tool = 'point';
@@ -392,6 +466,26 @@ for (const key of inputKeys) {
   });
 }
 
+for (const key of ['label-width', 'label-clearance']) {
+  byId(key).onchange = safe(async () => {
+    const field = byId(key);
+    if (!field.value || !field.checkValidity()) throw Error('请检查贴位宽度和净距的数值范围。');
+    current.settings.label = current.settings.label || {};
+    current.settings.label[key === 'label-width' ? 'width_mm' : 'clearance_mm'] = Number(field.value);
+    current.reading++;
+    await refresh();
+  });
+}
+
+byId('label-apply').onclick = safe(async () => {
+  const label = current.meta?.label;
+  if (!label || label.adopted) throw Error('当前检查窗内还没有可采用的贴位建议。');
+  current.settings.label = current.settings.label || {};
+  current.settings.label.x = label.x0;
+  await refresh();
+  status('已采用贴位 X ' + label.x0 + '–' + label.x1 + ' px，检查窗保持不变。');
+});
+
 byId('demo').onclick = safe(async () => {
   await activate(await json('/foil/demo', 'POST'));
   status('已打开合成练习。');
@@ -416,6 +510,7 @@ byId('save').onclick = safe(async () => {
 byId('return-current').onclick = safe(async () => {
   current.saved = null;
   current.pin = null;
+  current.meta = null;
   current.reading++;
   announceMap(directions.point);
   await refresh();

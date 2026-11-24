@@ -46,6 +46,14 @@
           <label>最小斑块像素数 <input id="min_pixels" type="number" min="1" max="4000000" step="1"></label>
           <button id="retain-settings" class="outline">保留设置</button>
         </section>
+        <section class="label-panel">
+          <h2>贴位</h2>
+          <p class="muted">贴位取检查窗的上下边，只在窗内左右挪动。</p>
+          <label>贴位宽度 mm <input id="label-width" type="number" min="0.01" max="10000" step="0.1"></label>
+          <label>最小净距 mm <input id="label-clearance" type="number" min="0" max="10000" step="0.1"></label>
+          <button id="label-apply" class="outline">采用这个贴位</button>
+          <p id="label-note" class="muted" aria-live="polite"></p>
+        </section>
         <section class="history"><h2>检查存档</h2><div id="archive"></div></section>
       </aside>
     </div>
